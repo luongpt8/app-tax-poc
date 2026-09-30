@@ -35,6 +35,7 @@ function collectTaxes(params) {
   const { logger, currentSpan } = getInstrumentationHelpers();
 
   logger.debug("Starting tax collection process");
+  
   try {
     const { oopQuote } = params;
 

@@ -1,5 +1,4 @@
-import { Button } from "@react-spectrum/s2/Button";
-import { ButtonGroup } from "@react-spectrum/s2/ButtonGroup";
+import { Button, ButtonGroup } from "@react-spectrum/s2/ButtonGroup";
 import { Content } from "@react-spectrum/s2/Content";
 import { Form } from "@react-spectrum/s2/Form";
 import { Heading } from "@react-spectrum/s2/Heading";
@@ -123,22 +122,23 @@ export function TaxClassDialog({
               </PickerItem>
             ))}
           </Picker>
-          <ButtonGroup align="end">
-            <Button
-              data-testid="tax-class-cancel-button"
-              onPress={close}
-              variant="secondary">
-              Cancel
-            </Button>
-            <Button
-              data-testid="tax-class-save-button"
-              onPress={handleSubmit}
-              variant="accent">
-              Save
-            </Button>
-          </ButtonGroup>
         </Form>
       </Content>
+      {/* Dialog only renders ButtonGroup in its footer slot when it's a direct child, not nested in Content/Form. */}
+      <ButtonGroup align="end">
+        <Button
+          data-testid="tax-class-cancel-button"
+          onPress={close}
+          variant="secondary">
+          Cancel
+        </Button>
+        <Button
+          data-testid="tax-class-save-button"
+          onPress={handleSubmit}
+          variant="accent">
+          Save
+        </Button>
+      </ButtonGroup>
     </>
   );
 }
