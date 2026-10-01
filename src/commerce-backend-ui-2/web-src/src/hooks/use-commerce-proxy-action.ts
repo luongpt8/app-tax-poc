@@ -20,7 +20,7 @@ export function useCommerceProxyAction() {
   return useCallback(
     async (
       operation: string,
-      method: "GET" | "POST" = "GET",
+      method: "GET" | "POST" | "DELETE" = "GET",
       payload: Record<string, unknown> | null = null,
     ): Promise<unknown> => {
       if (!(imsToken && imsOrgId)) {

@@ -1,8 +1,10 @@
 import { Button } from "@react-spectrum/s2/Button";
+import { AlertDialog } from "@react-spectrum/s2/AlertDialog";
 import { Content } from "@react-spectrum/s2/Content";
-import { Dialog, DialogTrigger } from "@react-spectrum/s2/Dialog";
+import { DialogTrigger } from "@react-spectrum/s2/Dialog";
 import { Heading } from "@react-spectrum/s2/Heading";
 import { IllustratedMessage } from "@react-spectrum/s2/IllustratedMessage";
+import { InlineAlert } from "@react-spectrum/s2/InlineAlert";
 import { ProgressCircle } from "@react-spectrum/s2/ProgressCircle";
 import { space, style } from "@react-spectrum/s2/style" with { type: "macro" };
 import {
@@ -14,34 +16,49 @@ import {
   TableView,
 } from "@react-spectrum/s2/TableView";
 import { Text } from "@react-spectrum/s2/Text";
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 
-import { TaxClassDialog } from "../components/tax-class-dialog.tsx";
-import { useCustomTaxCodes } from "../hooks/use-custom-tax-codes.ts";
+import { TaxClassDialogTrigger } from "../components/tax-class-dialog.tsx";
+import { useDeleteCommerceTaxClass } from "../hooks/use-delete-commerce-tax-class.ts";
 import { useGetCommerceTaxClasses } from "../hooks/use-get-commerce-tax-classes.ts";
 import { useUpsertCommerceTaxClass } from "../hooks/use-upsert-commerce-tax-class.ts";
 
 import type { TaxClass } from "../components/tax-class-dialog.tsx";
 
 export function TaxClassesPage() {
-  const { customTaxCodes, isLoadingCustomTaxCodes } = useCustomTaxCodes();
   const {
     commerceTaxClasses,
     isLoadingCommerceTaxClasses,
     refetchCommerceTaxClasses,
   } = useGetCommerceTaxClasses();
   const upsertCommerceTaxClass = useUpsertCommerceTaxClass();
+  const deleteCommerceTaxClass = useDeleteCommerceTaxClass();
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const handleSave = useCallback(
     async (newTaxClass: TaxClass) => {
-      try {
-        await upsertCommerceTaxClass(newTaxClass);
-        await refetchCommerceTaxClasses();
-      } catch (error) {
-        console.error("Something went wrong while saving tax class:", error);
-      }
+      // Let errors propagate so the dialog can keep itself open and show the message.
+      await upsertCommerceTaxClass(newTaxClass);
+      await refetchCommerceTaxClasses();
     },
     [upsertCommerceTaxClass, refetchCommerceTaxClasses],
+  );
+
+  const handleDelete = useCallback(
+    async (classId: number) => {
+      setDeleteError(null);
+      try {
+        await deleteCommerceTaxClass(classId);
+        await refetchCommerceTaxClasses();
+      } catch (error) {
+        setDeleteError(
+          error instanceof Error
+            ? error.message
+            : "Something went wrong while deleting the tax class.",
+        );
+      }
+    },
+    [deleteCommerceTaxClass, refetchCommerceTaxClasses],
   );
 
   const renderEmptyState = useCallback(
@@ -71,24 +88,25 @@ export function TaxClassesPage() {
         })}>
         <Heading level={1}>Manage Tax Classes</Heading>
 
-        <DialogTrigger>
-          <Button isDisabled={isLoadingCustomTaxCodes} variant="accent">
-            Add New Tax Class
-          </Button>
-          <Dialog>
-            {({ close }) => (
-              <TaxClassDialog
-                close={close}
-                customTaxCodes={customTaxCodes}
-                onSave={handleSave}
-                taxClass={null}
-              />
-            )}
-          </Dialog>
-        </DialogTrigger>
+        <TaxClassDialogTrigger
+          onSave={handleSave}
+          taxClass={null}
+          trigger={
+            <Button variant="accent">Add New Tax Class</Button>
+          }
+        />
       </div>
 
-      {isLoadingCustomTaxCodes || isLoadingCommerceTaxClasses ? (
+      {deleteError && (
+        <InlineAlert
+          UNSAFE_style={{ marginBottom: 16 }}
+          variant="negative">
+          <Heading>Could not delete tax class</Heading>
+          <Content>{deleteError}</Content>
+        </InlineAlert>
+      )}
+
+      {isLoadingCommerceTaxClasses ? (
         <div
           className={style({
             alignItems: "center",
@@ -134,21 +152,35 @@ export function TaxClassesPage() {
                       : ""}
                   </Cell>
                   <Cell>
-                    <DialogTrigger key={`${item.id}-${customTaxCodes.length}`}>
-                      <Button fillStyle="outline" variant="secondary">
-                        Edit
-                      </Button>
-                      <Dialog>
-                        {({ close }) => (
-                          <TaxClassDialog
-                            close={close}
-                            customTaxCodes={customTaxCodes}
-                            onSave={handleSave}
-                            taxClass={item}
-                          />
-                        )}
-                      </Dialog>
-                    </DialogTrigger>
+                    <div
+                      className={style({
+                        display: "flex",
+                        gap: 8,
+                      })}>
+                      <TaxClassDialogTrigger
+                        key={item.id}
+                        onSave={handleSave}
+                        taxClass={item}
+                        trigger={
+                          <Button fillStyle="outline" variant="secondary">
+                            Edit
+                          </Button>
+                        }
+                      />
+                      <DialogTrigger>
+                        <Button fillStyle="outline" variant="negative">
+                          Delete
+                        </Button>
+                        <AlertDialog
+                          cancelLabel="Cancel"
+                          onPrimaryAction={() => handleDelete(item.id)}
+                          primaryActionLabel="Delete"
+                          title="Delete Tax Class"
+                          variant="destructive">
+                          {`Are you sure you want to delete "${item.className}"? This cannot be undone.`}
+                        </AlertDialog>
+                      </DialogTrigger>
+                    </div>
                   </Cell>
                 </Row>
               )}

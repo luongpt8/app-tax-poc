@@ -13,8 +13,9 @@ const { main } = await import(
   "../../src/commerce-backend-ui-2/actions/commerce-proxy-action/index.js"
 );
 
-function mockClient({ get, post } = {}) {
+function mockClient({ get, post, delete: del } = {}) {
   getCommerceClient.mockResolvedValue({
+    delete: del ?? vi.fn(),
     get: get ?? vi.fn(),
     post: post ?? vi.fn(),
   });
@@ -71,11 +72,27 @@ describe("commerce-proxy-action admin-ui action", () => {
     });
   });
 
+  test("DELETEs the operation for a delete request", async () => {
+    const del = vi.fn().mockReturnValue({ json: () => Promise.resolve(true) });
+    mockClient({ delete: del });
+
+    const result = await main(
+      buildParams({ method: "DELETE", operation: "taxClasses/5" }),
+    );
+
+    expect(del).toHaveBeenCalledWith("taxClasses/5");
+    expect(result).toEqual({
+      body: true,
+      statusCode: 200,
+      type: "success",
+    });
+  });
+
   test("returns 405 for an unsupported method", async () => {
-    const result = await main(buildParams({ method: "DELETE" }));
+    const result = await main(buildParams({ method: "PUT" }));
 
     expect(result).toEqual({
-      body: { message: "Method DELETE not allowed" },
+      body: { message: "Method PUT not allowed" },
       statusCode: 405,
     });
     expect(getCommerceClient).not.toHaveBeenCalled();
@@ -103,6 +120,35 @@ describe("commerce-proxy-action admin-ui action", () => {
     expect(result).toEqual({
       body: { message: "Commerce request failed: App is not associated" },
       statusCode: 500,
+    });
+  });
+
+  test("forwards Commerce's status and fills %N placeholders from the error parameters", async () => {
+    const error = Object.assign(new Error("Request failed with status code 400"), {
+      response: {
+        json: () =>
+          Promise.resolve({
+            message:
+              "You cannot delete this tax class because it is used in existing %1(s).",
+            parameters: ["tax rule"],
+          }),
+        status: 400,
+      },
+    });
+    mockClient({
+      delete: vi.fn().mockReturnValue({ json: () => Promise.reject(error) }),
+    });
+
+    const result = await main(
+      buildParams({ method: "DELETE", operation: "taxClasses/5" }),
+    );
+
+    expect(result).toEqual({
+      body: {
+        message:
+          "Commerce request failed: You cannot delete this tax class because it is used in existing tax rule(s).",
+      },
+      statusCode: 400,
     });
   });
 

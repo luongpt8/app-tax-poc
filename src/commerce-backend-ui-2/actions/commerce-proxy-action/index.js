@@ -2,7 +2,21 @@ import { getCommerceClient } from "@adobe/aio-commerce-lib-app";
 import { forwardImsAuthProvider } from "@adobe/aio-commerce-sdk/auth";
 import { ok } from "@adobe/aio-commerce-sdk/core/responses";
 
-const SUPPORTED_METHODS = new Set(["GET", "POST"]);
+const SUPPORTED_METHODS = new Set(["GET", "POST", "DELETE"]);
+
+// Commerce webapi errors return placeholders (%1 or %name) plus a separate `parameters` list/map.
+function formatCommerceMessage({ message, parameters }) {
+  if (!(message && parameters)) {
+    return message;
+  }
+  const values = Array.isArray(parameters) ? parameters : Object.values(parameters);
+  return message.replace(/%(\w+)/g, (match, key) => {
+    if (/^\d+$/.test(key)) {
+      return values[Number(key) - 1] ?? match;
+    }
+    return Array.isArray(parameters) ? match : (parameters[key] ?? match);
+  });
+}
 
 /**
  * Generic Commerce REST proxy for this extension's Admin UI, forwarding the caller's own IMS
@@ -36,13 +50,26 @@ export async function main(params) {
     const response =
       httpMethod === "GET"
         ? await client.get(operation).json()
-        : await client.post(operation, { json: payload }).json();
+        : httpMethod === "DELETE"
+          ? await client.delete(operation).json()
+          : await client.post(operation, { json: payload }).json();
 
     return ok({ body: response });
   } catch (error) {
+    // ky's HTTPError exposes the raw Response; Commerce's webapi error body (e.g. validation
+    // messages) lives there, not in error.message, which is just the generic status line.
+    const commerceMessage = await error.response
+      ?.json()
+      .then((body) => (body ? formatCommerceMessage(body) : null))
+      .catch(() => null);
+
     return {
-      body: { message: `Commerce request failed: ${error.message}` },
-      statusCode: 500,
+      body: {
+        message: commerceMessage
+          ? `Commerce request failed: ${commerceMessage}`
+          : `Commerce request failed: ${error.message}`,
+      },
+      statusCode: error.response?.status ?? 500,
     };
   }
 }
