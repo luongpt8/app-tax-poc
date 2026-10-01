@@ -5,5 +5,8 @@ extensions:
   # This extension is required for app management. Do not remove.
   - extensionPointId: commerce/extensibility/1
 
+  # This extension serves the businessConfig schema (generated, do not remove while businessConfig is defined).
+  - extensionPointId: commerce/configuration/1
+
 apis:
   - code: AdobeIOManagementAPISDK

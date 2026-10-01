@@ -6,3 +6,7 @@ extensions:
   # This extension is required for app management. Do not remove.
   commerce/extensibility/1:
     $include: src/commerce-extensibility-1/ext.config.yaml
+
+  # This extension serves the businessConfig schema (generated, do not remove while businessConfig is defined).
+  commerce/configuration/1:
+    $include: src/commerce-configuration-1/ext.config.yaml

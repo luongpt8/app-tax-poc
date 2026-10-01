@@ -1,0 +1,20 @@
+[
+  {
+    "default": "",
+    "label": "Base URL App MOC Data",
+    "name": "mock-data-base-url",
+    "type": "url"
+  },
+  {
+    "default": "/api/v1/web/commerce-poc/tax-calculate",
+    "label": "API App MOC Data",
+    "name": "mock-data-api-endpoint",
+    "type": "text"
+  },
+  {
+    "default": "",
+    "label": "API Key",
+    "name": "mock-data-api-key",
+    "type": "password"
+  }
+]

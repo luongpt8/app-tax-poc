@@ -1,6 +1,8 @@
 import { MENU_STORES } from "@adobe/aio-commerce-lib-admin-ui/menu";
 import { defineConfig } from "@adobe/aio-commerce-lib-app/config";
 
+import { businessConfigSchema } from "./business-config.schema.ts";
+
 // biome-ignore assist/source/useSortedKeys: keep metadata at top level
 export default defineConfig({
   metadata: {
@@ -9,6 +11,9 @@ export default defineConfig({
     displayName: "Checkout Tax Integration",
     id: "checkout-tax-integration",
     version: "1.0.0",
+  },
+  businessConfig: {
+    schema: businessConfigSchema,
   },
   adminUi: {
     menu: {

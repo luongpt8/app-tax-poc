@@ -8,6 +8,28 @@
       "parentMenu": "stores"
     }
   },
+  "businessConfig": {
+    "schema": [
+      {
+        "default": "",
+        "label": "Base URL APP MOC DATA",
+        "name": "mock-data-base-url",
+        "type": "url"
+      },
+      {
+        "default": "/api/v1/web/commerce-poc/tax-calculate",
+        "label": "API APP MOC DATA",
+        "name": "mock-data-api-endpoint",
+        "type": "text"
+      },
+      {
+        "default": "",
+        "label": "API key",
+        "name": "mock-data-api-key",
+        "type": "password"
+      }
+    ]
+  },
   "installation": {
     "customInstallationSteps": [
       {
