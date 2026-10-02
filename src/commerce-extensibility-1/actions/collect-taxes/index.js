@@ -1,4 +1,9 @@
 import {
+  byCodeAndLevel,
+  getConfigurationByKey,
+  initialize,
+} from "@adobe/aio-commerce-lib-config";
+import {
   addOperation,
   exceptionOperation,
   isWebhookSuccessful,
@@ -10,16 +15,24 @@ import {
   instrumentEntrypoint,
 } from "@adobe/aio-lib-telemetry";
 
+import appConfig from "#app.commerce.config";
+
 import { checkoutMetrics } from "../checkout-metrics.js";
 import { telemetryConfig } from "../telemetry.js";
 
-const TAX_RATES = Object.freeze({
-  EXCLUDING_TAX: [
-    { code: "state_tax", rate: 4.5, title: "State Tax" },
-    { code: "county_tax", rate: 3.6, title: "County Tax" },
-  ],
-  INCLUDING_TAX: [{ code: "vat", rate: 8.4, title: "VAT" }],
-});
+const TAX_SERVICE_ERRORS = {
+  400: {
+    INVALID_ADDRESS: "The tax address is invalid or unsupported.",
+    INVALID_REQUEST: "A required field or item value is invalid.",
+  },
+  401: {
+    UNAUTHORIZED: "Basic credentials are missing or invalid.",
+  },
+  500: {
+    INTERNAL_ERROR: "An unexpected server error occurred.",
+    TAX_CALCULATION_FAILED: "The tax calculation failed.",
+  },
+};
 
 /**
  * This action calculates the tax for the given request.
@@ -31,20 +44,63 @@ const TAX_RATES = Object.freeze({
  * @returns {{statusCode: number, body: object}} the response object
  * @see https://developer.adobe.com/commerce/extensibility/webhooks
  */
-function collectTaxes(params) {
+async function collectTaxes(params) {
   const { logger, currentSpan } = getInstrumentationHelpers();
+  let stage = "receive quote";
 
   logger.debug("Starting tax collection process");
-  
+
   try {
     const { oopQuote } = params;
-
+    logger.info(
+      "Tax quote received : ",
+      JSON.stringify(oopQuote, null, 2),
+    );
     currentSpan.setAttribute("quote.items.count", oopQuote?.items?.length || 0);
 
-    const operations = [];
+    stage = "load configuration";
+    logger.info("Loading tax service configuration");
+    const { baseUrl, endpoint, apiKey } = await getTaxServiceConfig(params);
+    logger.info("Tax service configuration loaded");
 
-    oopQuote.items.forEach((item, index) => {
-      operations.push(...calculateTaxOperations(item, index));
+    stage = "prepare request";
+    const request = createTaxRequest(oopQuote);
+    const url = new URL(endpoint, baseUrl);
+    if (url.origin !== new URL(baseUrl).origin) {
+      throw new Error("Tax API endpoint must use the configured base URL");
+    }
+    logger.info("Tax request prepared", {
+      discountAmount: request.discount_amount,
+      itemCount: request.items.length,
+      shippingAmount: request.shipping_amount,
+    });
+
+    stage = "call tax service";
+    logger.info("Calling tax service", { path: url.pathname });
+    const response = await fetch(url, {
+      body: JSON.stringify(request),
+      headers: {
+        Authorization: `Basic ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      method: "POST",
+      signal: AbortSignal.timeout(8000),
+    });
+    logger.info("Tax service responded", { status: response.status });
+    if (!response.ok) {
+      throw await getTaxServiceError(response);
+    }
+
+    stage = "parse tax response";
+    const result = await response.json();
+    logger.info("Tax response parsed", {
+      itemCount: result?.items?.length ?? 0,
+    });
+
+    stage = "create Commerce operations";
+    const operations = createTaxOperations(oopQuote, result);
+    logger.info("Commerce tax operations created", {
+      count: operations.length,
     });
 
     logger.info(
@@ -56,86 +112,187 @@ function collectTaxes(params) {
 
     return ok(operations);
   } catch (error) {
-    logger.error("Error in tax collection:", error);
+    logger.error(`Tax collection failed during ${stage}:`, error);
     checkoutMetrics.collectTaxesCounter.add(1, {
-      errorCode: "exception",
+      errorCode: error.code ?? "exception",
       status: "error",
     });
     return ok(exceptionOperation(`Server error: ${error.message}`));
   }
 }
-/**
- * Calculates the tax operations for the given item.
- * @param {object} item the item to calculate the tax operations for
- * @param {number} index the index of the item in the quote
- * @returns {object[]} the tax operations
- */
-function calculateTaxOperations(item, index) {
-  const taxesToApply = obtainTaxRates(item);
 
-  const operations = [];
-
-  // This sample assumes that discount is applied before tax (Apply Tax After Discount = NO)
-  const discountAmount = Math.min(
-    item.unit_price * item.quantity,
-    item.discount_amount,
-  );
-  const taxableAmount = item.unit_price * item.quantity - discountAmount;
-  let itemTaxAmount = 0.0;
-  let discountCompensationTaxAmount = 0.0;
-
-  for (const tax of taxesToApply) {
-    let taxAmount = 0;
-
-    if (item.is_tax_included) {
-      // Reverse tax calculation when tax is included in price
-      taxAmount = taxableAmount - taxableAmount / (1 + tax.rate / 100);
-      // Hidden tax calculation assumes discount is applied before tax
-      const hiddenTax = discountAmount - discountAmount / (1 + tax.rate / 100);
-      discountCompensationTaxAmount += hiddenTax;
-    } else {
-      taxAmount = taxableAmount * (tax.rate / 100);
-    }
-
-    taxAmount = Math.round(taxAmount * 100) / 100;
-    itemTaxAmount += taxAmount;
-
-    operations.push(createTaxBreakdownOperation(index, tax, taxAmount));
+async function getTaxServiceError(response) {
+  let errorBody;
+  try {
+    errorBody = await response.json();
+  } catch {
+    return new Error(`Tax service returned HTTP ${response.status}`);
   }
 
-  itemTaxAmount = Math.round(itemTaxAmount * 100) / 100;
-  discountCompensationTaxAmount =
-    Math.round(discountCompensationTaxAmount * 100) / 100;
+  const code =
+    errorBody?.code ??
+    errorBody?.error?.code ??
+    errorBody?.error_code ??
+    (typeof errorBody?.error === "string" ? errorBody.error : undefined);
+  const descriptions = TAX_SERVICE_ERRORS[response.status];
+  if (!(descriptions && Object.hasOwn(descriptions, code))) {
+    return new Error(`Tax service returned HTTP ${response.status}`);
+  }
 
-  const netPrice = item.is_tax_included
-    ? taxableAmount - itemTaxAmount
-    : taxableAmount;
-  const itemTaxRate =
-    netPrice > 0 ? Math.round((itemTaxAmount / netPrice) * 10_000) / 100 : 0;
-
-  operations.push(
-    createTaxSummaryOperation(
-      index,
-      itemTaxRate,
-      itemTaxAmount,
-      discountCompensationTaxAmount,
-    ),
+  const error = new Error(
+    `Tax service HTTP ${response.status} ${code}: ${descriptions[code]}`,
   );
+  error.code = code;
+  return error;
+}
 
+async function getTaxServiceConfig(params) {
+  await initialize({ params, schema: appConfig.businessConfig.schema });
+  const scope = byCodeAndLevel("global", "global");
+  const [baseUrl, endpoint, apiKey] = await Promise.all([
+    getConfigurationByKey("mock-data-base-url", scope),
+    getConfigurationByKey("mock-data-api-endpoint", scope),
+    getConfigurationByKey("mock-data-api-key", scope, {
+      encryptionKey: params.AIO_COMMERCE_CONFIG_ENCRYPTION_KEY,
+    }),
+  ]);
+  if (
+    !(baseUrl.config?.value && endpoint.config?.value && apiKey.config?.value)
+  ) {
+    throw new Error(
+      "Tax service base URL, API endpoint and API key must be configured",
+    );
+  }
+  return {
+    apiKey: apiKey.config.value,
+    baseUrl: baseUrl.config.value,
+    endpoint: endpoint.config.value,
+  };
+}
+
+function createTaxRequest(quote) {
+  if (!(Array.isArray(quote?.items) && quote.ship_to_address)) {
+    throw new Error("Missing quote items or shipping address");
+  }
+  const products = quote.items.filter((item) => item.type !== "shipping");
+  return {
+    currency: "USD",
+    discount_amount: products.reduce(
+      (amount, item) => amount + Number(item.discount_amount || 0),
+      0,
+    ),
+    items: products.map((item) => ({
+      quantity: Number(item.quantity),
+      sku: item.sku,
+      tax_class: item.custom_attributes?.tax_code ?? item.tax_class,
+      unit_price: Number(item.unit_price),
+    })),
+    shipping_address: {
+      city: quote.ship_to_address.city,
+      country_code: quote.ship_to_address.country,
+      postal_code: quote.ship_to_address.postcode,
+      region: quote.ship_to_address.region_code,
+    },
+    shipping_amount: quote.items
+      .filter((item) => item.type === "shipping")
+      .reduce(
+        (amount, item) =>
+          amount + Number(item.unit_price) * Number(item.quantity),
+        0,
+      ),
+  };
+}
+
+function createTaxOperations(quote, result) {
+  if (result?.success !== true || !Array.isArray(result.items)) {
+    throw new Error("Tax service returned an invalid result");
+  }
+  const remaining = [...result.items];
+  const operations = quote.items.flatMap((item, index) => {
+    if (item.type === "shipping") {
+      return createShippingTaxOperations(
+        item,
+        index,
+        result.shipping_tax_amount,
+      );
+    }
+    const matchIndex = remaining.findIndex((entry) => entry.sku === item.sku);
+    if (matchIndex < 0) {
+      throw new Error(`Tax service did not return tax for SKU ${item.sku}`);
+    }
+    const [tax] = remaining.splice(matchIndex, 1);
+    return createProductTaxOperations(item, index, tax);
+  });
+  if (remaining.length > 0) {
+    throw new Error("Tax service returned unexpected items");
+  }
   return operations;
 }
 
-/**
- * Resolves the tax rates for the given item.
- * @param {object} item the item to resolve the tax rates for
- * @returns {{code: string, rate: number, title: string}[]} the tax rates
- * @see https://developer.adobe.com/commerce/extensibility/webhooks/responses/#responses
- */
-function obtainTaxRates(item) {
-  // Replace this example with external tax service containing the tax rates
-  return item.is_tax_included
-    ? TAX_RATES.INCLUDING_TAX
-    : TAX_RATES.EXCLUDING_TAX;
+function isFiniteAmount(value) {
+  return (
+    value !== null &&
+    value !== undefined &&
+    value !== "" &&
+    Number.isFinite(Number(value))
+  );
+}
+
+function createShippingTaxOperations(item, index, shippingTaxAmount) {
+  const amount = Number(shippingTaxAmount);
+  if (!isFiniteAmount(shippingTaxAmount)) {
+    throw new Error("Tax service did not return shipping tax");
+  }
+  const base = Number(item.unit_price) * Number(item.quantity);
+  const rate = base > 0 ? Math.round((amount / base) * 10_000) / 100 : 0;
+  return [
+    createTaxBreakdownOperation(
+      index,
+      { code: "shipping_tax", rate, title: "Shipping Tax" },
+      amount,
+    ),
+    createTaxSummaryOperation(index, rate, amount, 0),
+  ];
+}
+
+function createProductTaxOperations(item, index, tax) {
+  const amount = Number(tax.tax_amount);
+  const taxableAmount = Number(tax.taxable_amount);
+  if (
+    !(
+      isFiniteAmount(tax.tax_amount) &&
+      isFiniteAmount(tax.taxable_amount) &&
+      Array.isArray(tax.tax_details)
+    )
+  ) {
+    throw new Error(`Tax service returned invalid tax for SKU ${item.sku}`);
+  }
+  const breakdown = tax.tax_details.map((detail) => {
+    if (
+      !(
+        isFiniteAmount(detail.amount) &&
+        isFiniteAmount(detail.rate) &&
+        detail.code &&
+        detail.title
+      )
+    ) {
+      throw new Error(
+        `Tax service returned invalid breakdown for SKU ${item.sku}`,
+      );
+    }
+    return createTaxBreakdownOperation(index, detail, Number(detail.amount));
+  });
+  const rate =
+    taxableAmount > 0 ? Math.round((amount / taxableAmount) * 10_000) / 100 : 0;
+  const discount = Number(item.discount_amount || 0);
+  const compensation =
+    item.is_tax_included && rate > 0
+      ? Math.round((discount - discount / (1 + rate / 100)) * 100) / 100
+      : 0;
+  return [
+    ...breakdown,
+    createTaxSummaryOperation(index, rate, amount, compensation),
+  ];
 }
 
 /**

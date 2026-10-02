@@ -74,6 +74,7 @@ runtimeManifest:
           inputs:
             LOG_LEVEL: $LOG_LEVEL
             ENABLE_TELEMETRY: true
+            AIO_COMMERCE_CONFIG_ENCRYPTION_KEY: $AIO_COMMERCE_CONFIG_ENCRYPTION_KEY
           annotations:
             require-adobe-auth: false
             final: true

@@ -1,6 +1,17 @@
-import { describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { main } from "../../src/commerce-extensibility-1/actions/collect-taxes/index.js";
+vi.mock("@adobe/aio-commerce-lib-config", () => ({
+  byCodeAndLevel: vi.fn((code, level) => ({ code, level })),
+  getConfigurationByKey: vi.fn(),
+  initialize: vi.fn(),
+}));
+
+const { getConfigurationByKey } = await import(
+  "@adobe/aio-commerce-lib-config"
+);
+const { main } = await import(
+  "../../src/commerce-extensibility-1/actions/collect-taxes/index.js"
+);
 
 // @adobe/aio-lib-telemetry's getInstrumentationHelpers() requires ENABLE_TELEMETRY on the params
 // passed to the instrumented entrypoint — mirroring the ENABLE_TELEMETRY action input configured
@@ -8,33 +19,118 @@ import { main } from "../../src/commerce-extensibility-1/actions/collect-taxes/i
 // directly into `params`, so `oopQuote` arrives as a top-level key, not a base64 __ow_body.
 function buildParams(oopQuote) {
   return {
+    AIO_COMMERCE_CONFIG_ENCRYPTION_KEY: "encryption-key",
     ENABLE_TELEMETRY: true,
     oopQuote,
   };
 }
 
 describe("collect-taxes", () => {
-  test("calculates excluding-tax breakdown and summary operations", async () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getConfigurationByKey.mockImplementation(async (key) => ({
+      config: {
+        value: {
+          "mock-data-api-endpoint": "/api/v1/web/commerce-poc/tax-calculate",
+          "mock-data-api-key": "secret-key",
+          "mock-data-base-url": "https://example.test",
+        }[key],
+      },
+    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        json: async () => ({
+          items: [
+            {
+              sku: "7283C001",
+              tax_amount: 19.36,
+              tax_details: [
+                {
+                  amount: 12.1,
+                  code: "SALES_TAX_CODE_1",
+                  rate: 5,
+                  title: "Sales Tax Code 1",
+                },
+                {
+                  amount: 7.26,
+                  code: "SALES_TAX_CODE_2",
+                  rate: 3,
+                  title: "Sales Tax Code 2",
+                },
+              ],
+              taxable_amount: 241.99,
+            },
+          ],
+          shipping_tax_amount: 0.4,
+          success: true,
+        }),
+        ok: true,
+      }),
+    );
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  test("sends quote fields and maps external product and shipping taxes", async () => {
     const result = await main(
       buildParams({
         items: [
           {
-            discount_amount: 0,
+            custom_attributes: { tax_code: "BOX_TAX" },
+            discount_amount: 100,
             is_tax_included: false,
             quantity: 1,
-            unit_price: 100,
+            sku: "7283C001",
+            tax_class: "Box Tax",
+            type: "product",
+            unit_price: "341.991000",
           },
+          { quantity: 1, type: "shipping", unit_price: 5 },
         ],
+        ship_to_address: {
+          city: "Bronx",
+          country: "US",
+          postcode: "80239",
+          region_code: "CA",
+        },
       }),
     );
 
+    const [url, options] = fetch.mock.calls[0];
+    expect(url.toString()).toBe(
+      "https://example.test/api/v1/web/commerce-poc/tax-calculate",
+    );
+    expect(options.headers.Authorization).toBe("Basic secret-key");
+    expect(JSON.parse(options.body)).toEqual({
+      currency: "USD",
+      discount_amount: 100,
+      items: [
+        {
+          quantity: 1,
+          sku: "7283C001",
+          tax_class: "BOX_TAX",
+          unit_price: 341.991,
+        },
+      ],
+      shipping_address: {
+        city: "Bronx",
+        country_code: "US",
+        postal_code: "80239",
+        region: "CA",
+      },
+      shipping_amount: 5,
+    });
     expect(result.statusCode).toBe(200);
     expect(result.body).toContainEqual(
       expect.objectContaining({
         op: "add",
         path: "oopQuote/items/0/tax_breakdown",
         value: expect.objectContaining({
-          data: expect.objectContaining({ amount: 4.5, code: "state_tax" }),
+          data: expect.objectContaining({
+            amount: 12.1,
+            code: "SALES_TAX_CODE_1",
+          }),
         }),
       }),
     );
@@ -43,7 +139,10 @@ describe("collect-taxes", () => {
         op: "add",
         path: "oopQuote/items/0/tax_breakdown",
         value: expect.objectContaining({
-          data: expect.objectContaining({ amount: 3.6, code: "county_tax" }),
+          data: expect.objectContaining({
+            amount: 7.26,
+            code: "SALES_TAX_CODE_2",
+          }),
         }),
       }),
     );
@@ -52,35 +151,201 @@ describe("collect-taxes", () => {
         op: "replace",
         path: "oopQuote/items/0/tax",
         value: expect.objectContaining({
-          data: expect.objectContaining({ amount: 8.1 }),
+          data: expect.objectContaining({ amount: 19.36, rate: 8 }),
+        }),
+      }),
+    );
+    expect(result.body).toContainEqual(
+      expect.objectContaining({
+        op: "replace",
+        path: "oopQuote/items/1/tax",
+        value: expect.objectContaining({
+          data: expect.objectContaining({ amount: 0.4, rate: 8 }),
         }),
       }),
     );
   });
 
-  test("calculates including-tax (VAT) breakdown for tax-included items", async () => {
+  test("matches API tax amounts to the original SKU when results are reordered", async () => {
+    fetch.mockResolvedValue({
+      json: async () => ({
+        items: [
+          {
+            sku: "RF24-105-F4",
+            tax_amount: 101.18,
+            tax_details: [],
+            taxable_amount: 1264.8,
+          },
+          {
+            sku: "EOS-R5",
+            tax_amount: 194.66,
+            tax_details: [],
+            taxable_amount: 2433.2,
+          },
+        ],
+        success: true,
+      }),
+      ok: true,
+    });
     const result = await main(
       buildParams({
         items: [
           {
-            discount_amount: 0,
-            is_tax_included: true,
             quantity: 1,
-            unit_price: 100,
+            sku: "EOS-R5",
+            tax_class: "TAXABLE_GOODS",
+            type: "product",
+            unit_price: 2499,
+          },
+          {
+            quantity: 1,
+            sku: "RF24-105-F4",
+            tax_class: "TAXABLE_GOODS",
+            type: "product",
+            unit_price: 1299,
           },
         ],
+        ship_to_address: {
+          city: "Irvine",
+          country: "US",
+          postcode: "92618",
+          region_code: "CA",
+        },
       }),
     );
 
-    expect(result.body).toContainEqual(
+    expect(JSON.parse(fetch.mock.calls[0][1].body).items).toEqual([
+      {
+        quantity: 1,
+        sku: "EOS-R5",
+        tax_class: "TAXABLE_GOODS",
+        unit_price: 2499,
+      },
+      {
+        quantity: 1,
+        sku: "RF24-105-F4",
+        tax_class: "TAXABLE_GOODS",
+        unit_price: 1299,
+      },
+    ]);
+    expect(result.body).toEqual([
       expect.objectContaining({
-        op: "add",
-        path: "oopQuote/items/0/tax_breakdown",
-        value: expect.objectContaining({
-          data: expect.objectContaining({ code: "vat" }),
-        }),
+        path: "oopQuote/items/0/tax",
+        value: {
+          data: { amount: 194.66, discount_compensation_amount: 0, rate: 8 },
+        },
+      }),
+      expect.objectContaining({
+        path: "oopQuote/items/1/tax",
+        value: {
+          data: { amount: 101.18, discount_compensation_amount: 0, rate: 8 },
+        },
+      }),
+    ]);
+  });
+
+  test("fails closed when the tax service is unavailable", async () => {
+    fetch.mockResolvedValue({ ok: false, status: 503 });
+    const result = await main(buildParams({ items: [], ship_to_address: {} }));
+    expect(result.body).toEqual(expect.objectContaining({ op: "exception" }));
+  });
+
+  test.each([
+    [400, "INVALID_REQUEST", "A required field or item value is invalid."],
+    [400, "INVALID_ADDRESS", "The tax address is invalid or unsupported."],
+    [401, "UNAUTHORIZED", "Basic credentials are missing or invalid."],
+    [500, "TAX_CALCULATION_FAILED", "The tax calculation failed."],
+    [500, "INTERNAL_ERROR", "An unexpected server error occurred."],
+  ])(
+    "returns %s %s from the tax service as a Commerce exception",
+    async (status, code, message) => {
+      fetch.mockResolvedValue({
+        json: async () => ({ code, message }),
+        ok: false,
+        status,
+      });
+
+      const result = await main(
+        buildParams({ items: [], ship_to_address: {} }),
+      );
+
+      expect(result.statusCode).toBe(200);
+      expect(result.body).toEqual({
+        message: `Server error: Tax service HTTP ${status} ${code}: ${message}`,
+        op: "exception",
+      });
+    },
+  );
+
+  test("recognizes a nested error code without exposing upstream credentials", async () => {
+    fetch.mockResolvedValue({
+      json: async () => ({
+        error: { code: "UNAUTHORIZED", message: "Basic secret-key" },
+      }),
+      ok: false,
+      status: 401,
+    });
+
+    const result = await main(buildParams({ items: [], ship_to_address: {} }));
+
+    expect(result.body.message).toBe(
+      "Server error: Tax service HTTP 401 UNAUTHORIZED: Basic credentials are missing or invalid.",
+    );
+    expect(result.body.message).not.toContain("secret-key");
+  });
+
+  test("uses the HTTP status when the tax service returns a non-JSON error", async () => {
+    fetch.mockResolvedValue({
+      json: () => Promise.reject(new SyntaxError("Invalid JSON")),
+      ok: false,
+      status: 500,
+    });
+
+    const result = await main(buildParams({ items: [], ship_to_address: {} }));
+
+    expect(result.body).toEqual({
+      message: "Server error: Tax service returned HTTP 500",
+      op: "exception",
+    });
+  });
+
+  test("does not accept incomplete tax calculations as zero tax", async () => {
+    fetch.mockResolvedValue({
+      json: async () => ({
+        items: [
+          {
+            sku: "7283C001",
+            tax_amount: null,
+            tax_details: [],
+            taxable_amount: 241.99,
+          },
+        ],
+        shipping_tax_amount: 0.4,
+        success: true,
+      }),
+      ok: true,
+    });
+    const result = await main(
+      buildParams({
+        items: [{ sku: "7283C001", type: "product" }],
+        ship_to_address: { country: "US" },
       }),
     );
+    expect(result.body).toEqual(expect.objectContaining({ op: "exception" }));
+  });
+
+  test("does not send credentials to a different API origin", async () => {
+    const configuredValues = {
+      "mock-data-api-endpoint": "https://unexpected.test/tax-calculate",
+      "mock-data-api-key": "secret-key",
+      "mock-data-base-url": "https://example.test",
+    };
+    getConfigurationByKey.mockImplementation(async (key) => ({
+      config: { value: configuredValues[key] },
+    }));
+    const result = await main(buildParams({ items: [], ship_to_address: {} }));
+    expect(fetch).not.toHaveBeenCalled();
+    expect(result.body).toEqual(expect.objectContaining({ op: "exception" }));
   });
 
   test("returns an exception operation on unexpected error", async () => {
