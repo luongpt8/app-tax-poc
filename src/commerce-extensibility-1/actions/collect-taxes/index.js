@@ -77,6 +77,7 @@ async function collectTaxes(params) {
 
     stage = "call tax service";
     logger.info("Calling tax service", { path: url.pathname });
+    logger.debug("Tax request payload", JSON.stringify(request, null, 2));
     const response = await fetch(url, {
       body: JSON.stringify(request),
       headers: {
