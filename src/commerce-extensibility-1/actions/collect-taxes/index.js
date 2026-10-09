@@ -1,7 +1,6 @@
 import {
   byCodeAndLevel,
   getConfigurationByKey,
-  initialize,
 } from "@adobe/aio-commerce-lib-config";
 import {
   addOperation,
@@ -12,13 +11,12 @@ import {
 } from "@adobe/aio-commerce-sdk/webhooks/responses";
 import { getInstrumentationHelpers } from "@adobe/aio-lib-telemetry";
 
-import appConfig from "#app.commerce.config";
-
 import {
   createLogger,
   flushTelemetry,
   instrumentForNewRelic,
 } from "../../../../actions/lib/aioTelemetry.js";
+import { isAppEnabled } from "../app-enabled.js";
 import { checkoutMetrics } from "../checkout-metrics.js";
 
 const TAX_SERVICE_ERRORS = {
@@ -53,6 +51,14 @@ async function collectTaxes(params) {
   log({ level: "info", message: "Starting tax collection process" });
 
   try {
+    stage = "check app status";
+    if (!(await isAppEnabled(params))) {
+      log({
+        level: "info",
+        message: "Tax app disabled; skipping tax collection",
+      });
+      return ok([]);
+    }
     const { oopQuote } = params;
     log({
       data: oopQuote,
@@ -178,7 +184,6 @@ async function getTaxServiceError(response) {
 }
 
 async function getTaxServiceConfig(params) {
-  await initialize({ params, schema: appConfig.businessConfig.schema });
   const scope = byCodeAndLevel("global", "global");
   const [baseUrl, endpoint, apiKey] = await Promise.all([
     getConfigurationByKey("mock-data-base-url", scope),

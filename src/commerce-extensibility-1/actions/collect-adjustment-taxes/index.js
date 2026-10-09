@@ -9,6 +9,7 @@ import {
   instrumentEntrypoint,
 } from "@adobe/aio-lib-telemetry";
 
+import { isAppEnabled } from "../app-enabled.js";
 import { checkoutMetrics } from "../checkout-metrics.js";
 import { telemetryConfig } from "../telemetry.js";
 
@@ -27,12 +28,16 @@ const TAX_RATES = Object.freeze({
  * @returns {{statusCode: number, body: object}} the response object
  * @see https://developer.adobe.com/commerce/extensibility/webhooks
  */
-function collectAdjustmentTaxes(params) {
+async function collectAdjustmentTaxes(params) {
   const { logger } = getInstrumentationHelpers();
 
   logger.debug("Starting adjustment tax collection process");
 
   try {
+    if (!(await isAppEnabled(params))) {
+      logger.debug("Tax app disabled; skipping adjustment tax collection");
+      return ok([]);
+    }
     const { oopCreditMemo } = params;
     if (!oopCreditMemo?.items) {
       logger.error("Invalid or missing oopCreditMemo data");

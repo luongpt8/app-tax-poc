@@ -139,6 +139,42 @@ describe("collect-taxes", () => {
 
   afterEach(() => vi.unstubAllGlobals());
 
+  test("skips tax collection and service credentials when the app is disabled", async () => {
+    getConfigurationByKey.mockResolvedValue({ config: { value: false } });
+
+    const result = await main(buildParams(undefined));
+
+    expect(result.statusCode).toBe(200);
+    expect(result.body).toEqual([]);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(getConfigurationByKey).toHaveBeenCalledTimes(1);
+    expect(getConfigurationByKey).toHaveBeenCalledWith("app-enabled", {
+      code: "global",
+      level: "global",
+    });
+  });
+
+  test.each([true, undefined])(
+    "collects taxes when app-enabled is %s",
+    async (enabled) => {
+      getConfigurationByKey.mockResolvedValueOnce({
+        config: { value: enabled },
+      });
+      fetch.mockResolvedValue({
+        json: async () => ({ items: [], success: true }),
+        ok: true,
+      });
+
+      const result = await main(
+        buildParams({ items: [], ship_to_address: {} }),
+      );
+
+      expect(result.statusCode).toBe(200);
+      expect(result.body).toEqual([]);
+      expect(fetch).toHaveBeenCalledTimes(1);
+    },
+  );
+
   test("sends quote fields and maps external product and shipping taxes", async () => {
     const traceparent =
       "00-e992f3d72ad8e116f54eb7e50c3807a8-24a1ee2c5aa0d696-01";

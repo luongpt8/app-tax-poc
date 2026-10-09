@@ -1,6 +1,17 @@
-import { describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
-import { main } from "../../src/commerce-extensibility-1/actions/collect-adjustment-taxes/index.js";
+vi.mock("@adobe/aio-commerce-lib-config", () => ({
+  byCodeAndLevel: vi.fn((code, level) => ({ code, level })),
+  getConfigurationByKey: vi.fn(),
+  initialize: vi.fn(),
+}));
+
+const { getConfigurationByKey } = await import(
+  "@adobe/aio-commerce-lib-config"
+);
+const { main } = await import(
+  "../../src/commerce-extensibility-1/actions/collect-adjustment-taxes/index.js"
+);
 
 function buildParams(oopCreditMemo) {
   return {
@@ -10,6 +21,43 @@ function buildParams(oopCreditMemo) {
 }
 
 describe("collect-adjustment-taxes", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getConfigurationByKey.mockResolvedValue({ config: { value: true } });
+  });
+
+  test("skips adjustment taxes when the app is disabled", async () => {
+    getConfigurationByKey.mockResolvedValue({ config: { value: false } });
+
+    const result = await main(buildParams(undefined));
+
+    expect(result.statusCode).toBe(200);
+    expect(result.body).toEqual([]);
+    expect(getConfigurationByKey).toHaveBeenCalledWith("app-enabled", {
+      code: "global",
+      level: "global",
+    });
+  });
+
+  test("keeps adjustment taxes enabled when the setting is not saved yet", async () => {
+    getConfigurationByKey.mockResolvedValue({});
+
+    const result = await main(
+      buildParams({
+        adjustment: { refund: 100 },
+        items: [{ is_tax_included: false }],
+      }),
+    );
+
+    expect(result.body).toContainEqual(
+      expect.objectContaining({
+        op: "replace",
+        path: "oopCreditMemo/adjustment/refund_tax",
+        value: 8.1,
+      }),
+    );
+  });
+
   test("calculates refund and fee tax at the excluding-tax rate", async () => {
     const result = await main(
       buildParams({

@@ -56,11 +56,14 @@ Trong cấu hình của ứng dụng trên App Management, điền các giá tr�
 
 | Trường | Giá trị |
 | --- | --- |
+| **Enable App** | Bật/tắt xử lý tính thuế; mặc định bật |
 | **Base URL APP MOC DATA** | Base URL của dịch vụ thuế |
 | **API APP MOC DATA** | Endpoint tính thuế; mặc định là `/api/v1/web/commerce-poc/tax-calculate` |
 | **API key** | API key do dịch vụ thuế cấp |
 
 API key được khai báo là trường mật khẩu. Không chia sẻ giá trị này trong tài liệu, ảnh chụp màn hình hoặc log. URL endpoint phải cùng origin với Base URL.
+
+Khi tắt **Enable App** và lưu Business Config, ứng dụng không gọi dịch vụ thuế và không thay đổi thuế checkout hoặc thuế điều chỉnh credit memo. Ứng dụng vẫn được cài đặt và trang Tax management vẫn truy cập được. Bật lại và lưu để tiếp tục tính thuế. Cấu hình có thể được cache tối đa 5 phút trước khi webhook nhận giá trị mới.
 
 Khi checkout yêu cầu tính thuế, ứng dụng gửi danh sách sản phẩm, số lượng, SKU, tax class/tax code, chiết khấu, địa chỉ giao hàng và phí giao hàng tới dịch vụ. Dịch vụ cần trả kết quả thành công gồm thuế cho từng SKU và thuế phí giao hàng nếu có. Hiện tại request gửi currency là `USD`; hãy xác nhận điều này phù hợp với cửa hàng và dịch vụ thuế trước khi dùng cho giao dịch thực tế.
 
