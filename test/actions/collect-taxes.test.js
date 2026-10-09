@@ -145,7 +145,7 @@ describe("collect-taxes", () => {
     const result = await main(buildParams(undefined));
 
     expect(result.statusCode).toBe(200);
-    expect(result.body).toEqual([]);
+    expect(result.body).toEqual({ op: "success" });
     expect(fetch).not.toHaveBeenCalled();
     expect(getConfigurationByKey).toHaveBeenCalledTimes(1);
     expect(getConfigurationByKey).toHaveBeenCalledWith("app-enabled", {

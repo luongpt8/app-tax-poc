@@ -3,6 +3,7 @@ import {
   isWebhookSuccessful,
   ok,
   replaceOperation,
+  successOperation,
 } from "@adobe/aio-commerce-sdk/webhooks/responses";
 import {
   getInstrumentationHelpers,
@@ -36,7 +37,7 @@ async function collectAdjustmentTaxes(params) {
   try {
     if (!(await isAppEnabled(params))) {
       logger.debug("Tax app disabled; skipping adjustment tax collection");
-      return ok([]);
+      return ok(successOperation());
     }
     const { oopCreditMemo } = params;
     if (!oopCreditMemo?.items) {

@@ -8,6 +8,7 @@ import {
   isWebhookSuccessful,
   ok,
   replaceOperation,
+  successOperation,
 } from "@adobe/aio-commerce-sdk/webhooks/responses";
 import { getInstrumentationHelpers } from "@adobe/aio-lib-telemetry";
 
@@ -57,7 +58,7 @@ async function collectTaxes(params) {
         level: "info",
         message: "Tax app disabled; skipping tax collection",
       });
-      return ok([]);
+      return ok(successOperation());
     }
     const { oopQuote } = params;
     log({
