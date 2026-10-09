@@ -6,3 +6,6 @@ kit, built as an independent Adobe Commerce App Management app.
 See [Tax in Checkout Starter Kit](https://developer.adobe.com/commerce/extensibility/starter-kit/checkout/tax-install)
 for the business context, and the [App Management docs](https://developer.adobe.com/commerce/extensibility/app-management/)
 for install, build/deploy, and association.
+
+For instructions on configuring the tax service and managing Commerce tax classes, see the
+[Vietnamese user guide](USER_GUIDE.md).
