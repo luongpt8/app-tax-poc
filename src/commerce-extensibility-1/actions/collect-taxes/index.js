@@ -129,7 +129,7 @@ async function collectTaxes(params) {
       errorCode: error.code ?? "exception",
       errorName: error.name ?? "Error",
       level: "error",
-      message: `Tax collection failed during ${stage}`,
+      message: `Tax collection failed during test ${stage}`,
     });
     checkoutMetrics.collectTaxesCounter.add(1, {
       errorCode: error.code ?? "exception",
