@@ -5,8 +5,11 @@
 // node_modules packages. Some of those ship a tsconfig.json extending an
 // uninstalled devDependency, which fails the build.
 module.exports = {
-  'devtool': 'inline-source-map',
+  devtool: "inline-source-map",
   experiments: {
     typescript: false,
-  }
+  },
+  optimization: {
+    usedExports: false,
+  },
 };

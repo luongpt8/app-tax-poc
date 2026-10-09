@@ -10,15 +10,16 @@ import {
   ok,
   replaceOperation,
 } from "@adobe/aio-commerce-sdk/webhooks/responses";
-import {
-  getInstrumentationHelpers,
-  instrumentEntrypoint,
-} from "@adobe/aio-lib-telemetry";
+import { getInstrumentationHelpers } from "@adobe/aio-lib-telemetry";
 
 import appConfig from "#app.commerce.config";
 
+import {
+  createLogger,
+  flushTelemetry,
+  instrumentForNewRelic,
+} from "../../../../actions/lib/aioTelemetry.js";
 import { checkoutMetrics } from "../checkout-metrics.js";
-import { telemetryConfig } from "../telemetry.js";
 
 const TAX_SERVICE_ERRORS = {
   400: {
@@ -45,23 +46,26 @@ const TAX_SERVICE_ERRORS = {
  * @see https://developer.adobe.com/commerce/extensibility/webhooks
  */
 async function collectTaxes(params) {
-  const { logger, currentSpan } = getInstrumentationHelpers();
+  const { currentSpan } = getInstrumentationHelpers();
+  const log = createLogger(params);
   let stage = "receive quote";
 
-  logger.debug("Starting tax collection process");
+  log({ level: "info", message: "Starting tax collection process" });
 
   try {
     const { oopQuote } = params;
-    logger.info(
-      "Tax quote received : ",
-      JSON.stringify(oopQuote, null, 2),
-    );
+    log({
+      data: oopQuote,
+      itemCount: oopQuote?.items?.length || 0,
+      level: "info",
+      message: "Tax quote received",
+    });
     currentSpan.setAttribute("quote.items.count", oopQuote?.items?.length || 0);
 
     stage = "load configuration";
-    logger.info("Loading tax service configuration");
+    log({ level: "info", message: "Loading tax service configuration" });
     const { baseUrl, endpoint, apiKey } = await getTaxServiceConfig(params);
-    logger.info("Tax service configuration loaded");
+    log({ level: "info", message: "Tax service configuration loaded" });
 
     stage = "prepare request";
     const request = createTaxRequest(oopQuote);
@@ -69,15 +73,17 @@ async function collectTaxes(params) {
     if (url.origin !== new URL(baseUrl).origin) {
       throw new Error("Tax API endpoint must use the configured base URL");
     }
-    logger.info("Tax request prepared", {
+    log({
       discountAmount: request.discount_amount,
       itemCount: request.items.length,
+      level: "info",
+      message: "Tax request prepared",
       shippingAmount: request.shipping_amount,
     });
 
     stage = "call tax service";
-    logger.info("Calling tax service", { path: url.pathname });
-    logger.debug("Tax request payload", JSON.stringify(request, null, 2));
+    log({ level: "info", message: "Calling tax service", path: url.pathname });
+    log({ data: request, level: "debug", message: "Tax request payload" });
     const response = await fetch(url, {
       body: JSON.stringify(request),
       headers: {
@@ -87,38 +93,49 @@ async function collectTaxes(params) {
       method: "POST",
       signal: AbortSignal.timeout(8000),
     });
-    logger.info("Tax service responded", { status: response.status });
+    log({
+      level: "info",
+      message: "Tax service responded",
+      status: response.status,
+    });
     if (!response.ok) {
       throw await getTaxServiceError(response);
     }
 
     stage = "parse tax response";
     const result = await response.json();
-    logger.info("Tax response parsed", {
+    log({
+      data: JSON.stringify(result, null, 2),
       itemCount: result?.items?.length ?? 0,
+      level: "info",
+      message: "Tax response parsed",
     });
 
     stage = "create Commerce operations";
     const operations = createTaxOperations(oopQuote, result);
-    logger.info("Commerce tax operations created", {
+    log({
       count: operations.length,
+      level: "info",
+      message: "Commerce tax operations created",
     });
-
-    logger.info(
-      "Tax calculation response : ",
-      JSON.stringify(operations, null, 2),
-    );
 
     checkoutMetrics.collectTaxesCounter.add(1, { status: "success" });
 
     return ok(operations);
   } catch (error) {
-    logger.error(`Tax collection failed during ${stage}:`, error);
+    log({
+      errorCode: error.code ?? "exception",
+      errorName: error.name ?? "Error",
+      level: "error",
+      message: `Tax collection failed during ${stage}`,
+    });
     checkoutMetrics.collectTaxesCounter.add(1, {
       errorCode: error.code ?? "exception",
       status: "error",
     });
     return ok(exceptionOperation(`Server error: ${error.message}`));
+  } finally {
+    await flushTelemetry();
   }
 }
 
@@ -348,8 +365,7 @@ function createTaxSummaryOperation(
   );
 }
 
-// Export the instrumented function as main
-export const main = instrumentEntrypoint(collectTaxes, {
-  ...telemetryConfig,
+export const main = instrumentForNewRelic(collectTaxes, {
+  exportToNewRelic: true,
   isSuccessful: isWebhookSuccessful,
 });

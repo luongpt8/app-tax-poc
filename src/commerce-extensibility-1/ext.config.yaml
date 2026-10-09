@@ -74,6 +74,8 @@ runtimeManifest:
           inputs:
             LOG_LEVEL: $LOG_LEVEL
             ENABLE_TELEMETRY: true
+            NEW_RELIC_LICENSE_KEY: $NEW_RELIC_LICENSE_KEY
+            NEW_RELIC_LOG_ENDPOINT: $NEW_RELIC_LOG_ENDPOINT
             AIO_COMMERCE_CONFIG_ENCRYPTION_KEY: $AIO_COMMERCE_CONFIG_ENCRYPTION_KEY
           annotations:
             require-adobe-auth: false
