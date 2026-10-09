@@ -91,12 +91,12 @@ async function collectTaxes(params) {
     log({ level: "info", message: "Calling tax service", path: url.pathname });
     log({ data: request, level: "debug", message: "Tax request payload" });
     const traceparent = getRequestHeader(params, "traceparent");
+    log({ data: traceparent, level: "debug", message: "Tax request traceparent header" });
     const response = await fetch(url, {
       body: JSON.stringify(request),
       headers: {
         Authorization: `Basic ${apiKey}`,
-        "Content-Type": "application/json",
-        ...(traceparent ? { traceparent } : {}),
+        "Content-Type": "application/json"
       },
       method: "POST",
       signal: AbortSignal.timeout(8000),
