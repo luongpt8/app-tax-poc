@@ -7,6 +7,7 @@ on:
 jobs:
   deploy:
     name: Deploy to Stage
+    environment: stage
     runs-on: ${{ matrix.os }}
     strategy:
       max-parallel: 1
@@ -26,6 +27,24 @@ jobs:
         with:
           os: ${{ matrix.os }}
           version: 11.1.2
+      - name: Validate Stage OAuth secrets
+        env:
+          CLIENTID: ${{ secrets.CLIENTID }}
+          CLIENTSECRET: ${{ secrets.CLIENTSECRET }}
+          TECHNICALACCOUNTID: ${{ secrets.TECHNICALACCOUNTID }}
+          TECHNICALACCOUNTEMAIL: ${{ secrets.TECHNICALACCOUNTEMAIL }}
+          IMSORGID: ${{ secrets.IMSORGID }}
+        run: |
+          missing=()
+          for name in CLIENTID CLIENTSECRET TECHNICALACCOUNTID TECHNICALACCOUNTEMAIL IMSORGID; do
+            if [[ -z "${!name}" ]]; then
+              missing+=("$name")
+            fi
+          done
+          if ((${#missing[@]})); then
+            printf '::error title=Missing Stage OAuth secrets::Configure these secrets in the Stage GitHub Environment or repository: %s\n' "${missing[*]}"
+            exit 1
+          fi
       - name: Auth
         uses: adobe/aio-apps-action@6d7fdea67de9ef5ee3bf4c730aeaa5eaa7e2c533 # 4.1.0
         with:
