@@ -1,10 +1,76 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
+const telemetryState = vi.hoisted(() => ({
+  exportedBatches: [],
+  exporterOptions: [],
+}));
+
 vi.mock("@adobe/aio-commerce-lib-config", () => ({
   byCodeAndLevel: vi.fn((code, level) => ({ code, level })),
   getConfigurationByKey: vi.fn(),
   initialize: vi.fn(),
 }));
+
+vi.mock("@adobe/aio-lib-telemetry/otel", () => {
+  function TestOTLPLogExporter(options) {
+    telemetryState.exporterOptions.push(options);
+  }
+  TestOTLPLogExporter.prototype.export = function exportLogs(
+    records,
+    callback,
+  ) {
+    telemetryState.exportedBatches.push(records);
+    callback({ code: 0 });
+  };
+
+  function TestBatchLogRecordProcessor({ exporter }) {
+    this.exporter = exporter;
+    this.records = [];
+  }
+
+  TestBatchLogRecordProcessor.prototype.onEmit = function onEmit(record) {
+    this.records.push(record);
+  };
+
+  TestBatchLogRecordProcessor.prototype.forceFlush =
+    async function forceFlush() {
+      const records = this.records.splice(0);
+      if (records.length === 0) {
+        return;
+      }
+      await new Promise((resolve, reject) => {
+        this.exporter.export(records, (result) => {
+          if (result.code === 0) {
+            resolve();
+          } else {
+            reject(result.error ?? new Error("test export failed"));
+          }
+        });
+      });
+    };
+
+  function TestLoggerProvider({ processors }) {
+    this.processor = processors[0];
+  }
+
+  TestLoggerProvider.prototype.getLogger = function getLogger() {
+    return {
+      emit: (record) => this.processor.onEmit(record),
+    };
+  };
+
+  TestLoggerProvider.prototype.forceFlush = function forceFlush() {
+    return this.processor.forceFlush();
+  };
+
+  return {
+    BatchLogRecordProcessor: TestBatchLogRecordProcessor,
+    LoggerProvider: TestLoggerProvider,
+    OTLPLogExporterProto: TestOTLPLogExporter,
+    SeverityNumber: { ERROR: 17, INFO: 9, WARN: 13 },
+    ValueType: { DOUBLE: 0, INT: 1 },
+  };
+});
 
 const { getConfigurationByKey } = await import(
   "@adobe/aio-commerce-lib-config"
@@ -360,5 +426,44 @@ describe("collect-taxes", () => {
 
     expect(result.statusCode).toBe(200);
     expect(result.body).toEqual(expect.objectContaining({ op: "exception" }));
+  });
+
+  test("exports records when the global telemetry SDK was initialized earlier", async () => {
+    const quote = {
+      items: [
+        {
+          quantity: 1,
+          sku: "7283C001",
+          tax_class: "Box Tax",
+          type: "product",
+          unit_price: 100,
+        },
+      ],
+      ship_to_address: {
+        city: "Bronx",
+        country: "US",
+        postcode: "80239",
+        region_code: "CA",
+      },
+    };
+
+    await main(buildParams(quote));
+    telemetryState.exportedBatches.length = 0;
+    telemetryState.exporterOptions.length = 0;
+    const params = {
+      ...buildParams(quote),
+      NEW_RELIC_LICENSE_KEY: "test-license-key",
+      NEW_RELIC_LOG_ENDPOINT: "https://otlp.nr-data.net/v1/logs",
+    };
+
+    await main(params);
+
+    expect(telemetryState.exporterOptions).toHaveLength(1);
+    expect(telemetryState.exportedBatches).toHaveLength(1);
+    expect(
+      telemetryState.exportedBatches[0].some((record) =>
+        String(record.body).includes("Tax quote received"),
+      ),
+    ).toBe(true);
   });
 });

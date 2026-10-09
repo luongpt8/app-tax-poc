@@ -2,25 +2,28 @@
 import {
     defineTelemetryConfig,
     getAioRuntimeResourceWithAttributes,
-    getLogger,
     getPresetInstrumentations,
     instrumentEntrypoint,
 } from "@adobe/aio-lib-telemetry";
 import {
     BatchLogRecordProcessor,
+    LoggerProvider,
     OTLPLogExporterProto,
+    SeverityNumber,
 } from "@adobe/aio-lib-telemetry/otel";
 
 const SENSITIVE_KEY =
     /password|secret|token|license.?key|authorization|credential|username|customer_id/i;
 const TRAILING_SLASH = /\/$/;
 let logRecordProcessor;
+let newRelicLoggerProvider;
+let newRelicLogger;
 let missingLicenseWarningLogged = false;
 let invalidEndpointWarningLogged = false;
 let emittedLogRecordCount = 0;
 const NEW_RELIC_OTLP_ENDPOINTS = new Map([
-    ["https://otlp.nr-data.net", "https://otlp.nr-data.net:4318/v1/logs"],
-    ["https://otlp.nr-data.net/v1/logs", "https://otlp.nr-data.net:4318/v1/logs"],
+    ["https://otlp.nr-data.net", "https://otlp.nr-data.net/v1/logs"],
+    ["https://otlp.nr-data.net/v1/logs", "https://otlp.nr-data.net/v1/logs"],
     [
         "https://otlp.nr-data.net:4318/v1/logs",
         "https://otlp.nr-data.net:4318/v1/logs",
@@ -167,12 +170,14 @@ function sanitize(value, key = "", depth = 0) {
 const telemetryConfig = defineTelemetryConfig((params, isDev) => {
     const licenseKey = params.NEW_RELIC_LICENSE_KEY;
     const configuredEndpoint = params.NEW_RELIC_LOG_ENDPOINT;
+    const resource = getAioRuntimeResourceWithAttributes({
+        "service.version": "1.0.0",
+    });
     const sdkConfig = {
         instrumentations: getPresetInstrumentations("simple"),
+        logRecordProcessors: [],
         metricReaders: [],
-        resource: getAioRuntimeResourceWithAttributes({
-            "service.version": "1.0.0",
-        }),
+        resource,
         serviceName: "checkout-tax-integration",
         spanProcessors: [],
     };
@@ -197,6 +202,14 @@ const telemetryConfig = defineTelemetryConfig((params, isDev) => {
                     exportTimeoutMillis: 1500,
                     maxExportBatchSize: 64,
                 });
+                newRelicLoggerProvider = new LoggerProvider({
+                    processors: [logRecordProcessor],
+                    resource,
+                });
+                newRelicLogger = newRelicLoggerProvider.getLogger(
+                    "checkout-tax-integration",
+                    "1.0.0",
+                );
                 console.info("[new-relic] batch processor initialized", {
                     exportTimeoutMillis: 1500,
                     maxExportBatchSize: 64,
@@ -209,7 +222,6 @@ const telemetryConfig = defineTelemetryConfig((params, isDev) => {
                 throw error;
             }
         }
-        sdkConfig.logRecordProcessors = [logRecordProcessor];
     } else if (!isDev && !missingLicenseWarningLogged) {
         console.warn(
             "[new-relic] log export disabled: NEW_RELIC_LICENSE_KEY is missing or NULL in action inputs",
@@ -228,7 +240,7 @@ const telemetryConfig = defineTelemetryConfig((params, isDev) => {
 });
 
 async function flushTelemetry() {
-    if (!logRecordProcessor) {
+    if (!newRelicLoggerProvider) {
         console.info("[new-relic] flush skipped", {
             reason: "batch processor is not initialized",
         });
@@ -237,7 +249,7 @@ async function flushTelemetry() {
     const startedAt = Date.now();
     console.info("[new-relic] flush started");
     try {
-        await logRecordProcessor.forceFlush();
+        await newRelicLoggerProvider.forceFlush();
         console.info("[new-relic] flush completed", {
             durationMs: Date.now() - startedAt,
         });
@@ -251,9 +263,7 @@ async function flushTelemetry() {
 }
 
 function createLogger(params = {}) {
-    const logger = getLogger("checkout-tax-integration", {
-        level: params.LOG_LEVEL || "info",
-    });
+    const logLevel = params.LOG_LEVEL || "info";
 
     return function log(data) {
         const entry = sanitize(data);
@@ -263,11 +273,34 @@ function createLogger(params = {}) {
                 ? requestedLevel
                 : "info";
         const message = logMessage || "[oms]";
-        logger[level](
-            Object.keys(attributes).length
-                ? `${message}\n${JSON.stringify(attributes, null, 2)}`
-                : message,
-        );
+        const renderedMessage = Object.keys(attributes).length
+            ? `${message}\n${JSON.stringify(attributes, null, 2)}`
+            : message;
+        const consoleLevel =
+            level === "info" && logLevel === "debug" ? "info" : level;
+        console[consoleLevel](renderedMessage);
+        if (!newRelicLogger) {
+            console.info("[new-relic] log record not queued", {
+                level,
+                reason: "dedicated New Relic logger is not initialized",
+            });
+            return;
+        }
+
+        const timestamp = Date.now();
+        newRelicLogger.emit({
+            attributes: { "log.level": level },
+            body: renderedMessage,
+            observedTimestamp: timestamp,
+            severityNumber:
+                level === "error"
+                    ? SeverityNumber.ERROR
+                    : level === "warn"
+                        ? SeverityNumber.WARN
+                        : SeverityNumber.INFO,
+            severityText: level.toUpperCase(),
+            timestamp,
+        });
         emittedLogRecordCount += 1;
         console.info("[new-relic] log record emitted", {
             level,
