@@ -34,9 +34,10 @@ jobs:
           TECHNICALACCOUNTID: ${{ secrets.TECHNICALACCOUNTID }}
           TECHNICALACCOUNTEMAIL: ${{ secrets.TECHNICALACCOUNTEMAIL }}
           IMSORGID: ${{ secrets.IMSORGID }}
+          AIO_COMMERCE_CONFIG_ENCRYPTION_KEY: ${{ secrets.AIO_COMMERCE_CONFIG_ENCRYPTION_KEY }}
         run: |
           missing=()
-          for name in CLIENTID CLIENTSECRET TECHNICALACCOUNTID TECHNICALACCOUNTEMAIL IMSORGID; do
+          for name in CLIENTID CLIENTSECRET TECHNICALACCOUNTID TECHNICALACCOUNTEMAIL IMSORGID AIO_COMMERCE_CONFIG_ENCRYPTION_KEY; do
             if [[ -z "${!name}" ]]; then
               missing+=("$name")
             fi
@@ -59,6 +60,7 @@ jobs:
       - name: Build
         env:
           AIO_RUNTIME_NAMESPACE: ${{ secrets.AIO_RUNTIME_NAMESPACE }}
+          AIO_COMMERCE_CONFIG_ENCRYPTION_KEY: ${{ secrets.AIO_COMMERCE_CONFIG_ENCRYPTION_KEY }}
         uses: adobe/aio-apps-action@6d7fdea67de9ef5ee3bf4c730aeaa5eaa7e2c533 # 4.1.0
         with:
           os: ${{ matrix.os }}
@@ -73,6 +75,7 @@ jobs:
           AIO_PROJECT_WORKSPACE_ID: ${{ secrets.AIO_PROJECT_WORKSPACE_ID }}
           AIO_PROJECT_WORKSPACE_NAME: ${{ secrets.AIO_PROJECT_WORKSPACE_NAME }}
           AIO_PROJECT_WORKSPACE_DETAILS_SERVICES: ${{ secrets.AIO_PROJECT_WORKSPACE_DETAILS_SERVICES }}
+          AIO_COMMERCE_CONFIG_ENCRYPTION_KEY: ${{ secrets.AIO_COMMERCE_CONFIG_ENCRYPTION_KEY }}
           NEW_RELIC_LICENSE_KEY: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
           NEW_RELIC_LOG_ENDPOINT: ${{ vars.NEW_RELIC_LOG_ENDPOINT }}
         uses: adobe/aio-apps-action@6d7fdea67de9ef5ee3bf4c730aeaa5eaa7e2c533 # 4.1.0
