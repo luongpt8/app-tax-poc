@@ -84,11 +84,13 @@ async function collectTaxes(params) {
     stage = "call tax service";
     log({ level: "info", message: "Calling tax service", path: url.pathname });
     log({ data: request, level: "debug", message: "Tax request payload" });
+    const traceparent = getRequestHeader(params, "traceparent");
     const response = await fetch(url, {
       body: JSON.stringify(request),
       headers: {
         Authorization: `Basic ${apiKey}`,
         "Content-Type": "application/json",
+        ...(traceparent ? { traceparent } : {}),
       },
       method: "POST",
       signal: AbortSignal.timeout(8000),
@@ -137,6 +139,17 @@ async function collectTaxes(params) {
   } finally {
     await flushTelemetry();
   }
+}
+
+function getRequestHeader(params, headerName) {
+  const headers = params?.__ow_headers;
+  if (!headers || typeof headers !== "object") {
+    return;
+  }
+  const header = Object.entries(headers).find(
+    ([name]) => name.toLowerCase() === headerName.toLowerCase(),
+  )?.[1];
+  return typeof header === "string" && header.trim() ? header : undefined;
 }
 
 async function getTaxServiceError(response) {

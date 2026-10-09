@@ -17,11 +17,12 @@ const { main } = await import(
 // passed to the instrumented entrypoint — mirroring the ENABLE_TELEMETRY action input configured
 // in ext.config.yaml. With require-adobe-auth: true (no raw-http), Runtime parses the JSON body
 // directly into `params`, so `oopQuote` arrives as a top-level key, not a base64 __ow_body.
-function buildParams(oopQuote) {
+function buildParams(oopQuote, headers) {
   return {
     AIO_COMMERCE_CONFIG_ENCRYPTION_KEY: "encryption-key",
     ENABLE_TELEMETRY: true,
     oopQuote,
+    ...(headers ? { __ow_headers: headers } : {}),
   };
 }
 
@@ -73,28 +74,33 @@ describe("collect-taxes", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   test("sends quote fields and maps external product and shipping taxes", async () => {
+    const traceparent =
+      "00-e992f3d72ad8e116f54eb7e50c3807a8-24a1ee2c5aa0d696-01";
     const result = await main(
-      buildParams({
-        items: [
-          {
-            custom_attributes: { tax_code: "BOX_TAX" },
-            discount_amount: 100,
-            is_tax_included: false,
-            quantity: 1,
-            sku: "7283C001",
-            tax_class: "Box Tax",
-            type: "product",
-            unit_price: "341.991000",
+      buildParams(
+        {
+          items: [
+            {
+              custom_attributes: { tax_code: "BOX_TAX" },
+              discount_amount: 100,
+              is_tax_included: false,
+              quantity: 1,
+              sku: "7283C001",
+              tax_class: "Box Tax",
+              type: "product",
+              unit_price: "341.991000",
+            },
+            { quantity: 1, type: "shipping", unit_price: 5 },
+          ],
+          ship_to_address: {
+            city: "Bronx",
+            country: "US",
+            postcode: "80239",
+            region_code: "CA",
           },
-          { quantity: 1, type: "shipping", unit_price: 5 },
-        ],
-        ship_to_address: {
-          city: "Bronx",
-          country: "US",
-          postcode: "80239",
-          region_code: "CA",
         },
-      }),
+        { traceparent },
+      ),
     );
 
     const [url, options] = fetch.mock.calls[0];
@@ -102,6 +108,7 @@ describe("collect-taxes", () => {
       "https://example.test/api/v1/web/commerce-poc/tax-calculate",
     );
     expect(options.headers.Authorization).toBe("Basic secret-key");
+    expect(options.headers.traceparent).toBe(traceparent);
     expect(JSON.parse(options.body)).toEqual({
       currency: "USD",
       discount_amount: 100,

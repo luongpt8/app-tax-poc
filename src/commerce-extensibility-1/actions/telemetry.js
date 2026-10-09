@@ -15,7 +15,9 @@ import {
 export const telemetryConfig = defineTelemetryConfig((_params, _isDev) => ({
   sdkConfig: {
     instrumentations: getPresetInstrumentations("simple"),
+    metricReaders: [],
     resource: getAioRuntimeResource(),
     serviceName: "checkout-tax-integration",
+    spanProcessors: [],
   },
 }));

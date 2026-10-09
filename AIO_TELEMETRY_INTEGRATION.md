@@ -18,7 +18,13 @@ This repository already declares the dependency.
 
 ## Configure New Relic
 
-Keep credentials in `.env` for local development and in deployment secrets for deployed actions. Do not commit the license key.
+Keep credentials in `.env` for local development and in deployment secrets for deployed actions. Do not commit the license key. After deploy please config two variable on the github
+Setting => Enviroment => Environment secrets => Add Secrets
+ - NEW_RELIC_LICENSE_KEY
+Setting => Enviroment => Environment variables => add
+ - NEW_RELIC_LOG_ENDPOINT = https://otlp.nr-data.net/v1/logs
+
+
 
 ```dotenv
 NEW_RELIC_LICENSE_KEY=your-new-relic-license-key
@@ -148,6 +154,18 @@ npx vitest run test/actions/collect-taxes.test.js
 ```
 
 Then invoke the action with a valid request and, when trace correlation is needed, a valid `traceparent` header. In New Relic Logs, check the service identity, log body, and trace ID. A successful API response alone does not prove that New Relic ingested the logs.
+
+## Runtime Export Diagnostics
+
+The adapter writes `[new-relic]` diagnostics to the Adobe Runtime action logs. Follow these messages in order:
+
+1. `exporter configuration accepted` means a non-empty license key was received. The endpoint is reported as host and path only; the key is never logged.
+2. `batch processor initialized` means the OTLP exporter and batch processor were constructed.
+3. `log record emitted` means the application logger handed a record to the telemetry SDK. It does not yet confirm export.
+4. `batch export started` reports how many records are in the outgoing batch. `batch export completed` with `resultCode: 0` means the OTLP exporter received a successful response. `batch export failed` or `batch export threw` includes only a safe error name/code.
+5. `flush completed` means the action finished flushing pending telemetry. `flush skipped` means no batch processor was configured.
+
+If `log export disabled` appears, check the action's `NEW_RELIC_LICENSE_KEY` input. If `unrecognized NEW_RELIC_LOG_ENDPOINT` appears, correct that input; the adapter falls back to the US endpoint. `Telemetry SDK already initialized, skipping telemetry initialization` is expected when a warm Runtime process handles a later invocation; it is not an exporter failure.
 
 ## Troubleshooting
 

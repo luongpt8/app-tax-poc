@@ -15,6 +15,9 @@ const SENSITIVE_KEY =
     /password|secret|token|license.?key|authorization|credential|username|customer_id/i;
 const TRAILING_SLASH = /\/$/;
 let logRecordProcessor;
+let missingLicenseWarningLogged = false;
+let invalidEndpointWarningLogged = false;
+let emittedLogRecordCount = 0;
 const NEW_RELIC_OTLP_ENDPOINTS = new Map([
     ["https://otlp.nr-data.net", "https://otlp.nr-data.net:4318/v1/logs"],
     ["https://otlp.nr-data.net/v1/logs", "https://otlp.nr-data.net:4318/v1/logs"],
@@ -71,11 +74,73 @@ const NEW_RELIC_OTLP_ENDPOINTS = new Map([
 ]);
 
 function resolveNewRelicEndpoint(endpoint) {
-    return (
-        NEW_RELIC_OTLP_ENDPOINTS.get(
-            String(endpoint || "").replace(TRAILING_SLASH, ""),
-        ) || "https://otlp.nr-data.net:4318/v1/logs"
+    const configuredEndpoint = String(endpoint || "").replace(
+        TRAILING_SLASH,
+        "",
     );
+    const resolvedEndpoint = NEW_RELIC_OTLP_ENDPOINTS.get(configuredEndpoint);
+    if (resolvedEndpoint) {
+        return resolvedEndpoint;
+    }
+    if (configuredEndpoint && !invalidEndpointWarningLogged) {
+        console.warn(
+            "[new-relic] unrecognized NEW_RELIC_LOG_ENDPOINT; falling back to the US endpoint",
+        );
+        invalidEndpointWarningLogged = true;
+    }
+    return "https://otlp.nr-data.net:4318/v1/logs";
+}
+
+function describeEndpoint(endpoint) {
+    try {
+        const url = new URL(endpoint);
+        return { host: url.host, path: url.pathname };
+    } catch {
+        return { host: "invalid", path: "unavailable" };
+    }
+}
+
+function instrumentExporter(exporter) {
+    const exportBatch = exporter.export.bind(exporter);
+    exporter.export = (records, callback) => {
+        const startedAt = Date.now();
+        console.info("[new-relic] batch export started", {
+            recordCount: records?.length ?? 0,
+        });
+
+        try {
+            return exportBatch(records, (result) => {
+                const succeeded = result?.code === 0;
+                const details = {
+                    durationMs: Date.now() - startedAt,
+                    resultCode: result?.code ?? "unknown",
+                    recordCount: records?.length ?? 0,
+                };
+                if (succeeded) {
+                    console.info("[new-relic] batch export completed", details);
+                } else {
+                    console.error("[new-relic] batch export failed", {
+                        ...details,
+                        errorCode:
+                            result?.error?.code ??
+                            result?.error?.statusCode ??
+                            "unknown",
+                        errorName: result?.error?.name ?? "Error",
+                    });
+                }
+                callback(result);
+            });
+        } catch (error) {
+            console.error("[new-relic] batch export threw", {
+                durationMs: Date.now() - startedAt,
+                errorCode: error.code ?? error.statusCode ?? "unknown",
+                errorName: error.name || "Error",
+                recordCount: records?.length ?? 0,
+            });
+            throw error;
+        }
+    };
+    return exporter;
 }
 
 function sanitize(value, key = "", depth = 0) {
@@ -101,28 +166,60 @@ function sanitize(value, key = "", depth = 0) {
 
 const telemetryConfig = defineTelemetryConfig((params, isDev) => {
     const licenseKey = params.NEW_RELIC_LICENSE_KEY;
+    const configuredEndpoint = params.NEW_RELIC_LOG_ENDPOINT;
     const sdkConfig = {
         instrumentations: getPresetInstrumentations("simple"),
+        metricReaders: [],
         resource: getAioRuntimeResourceWithAttributes({
             "service.version": "1.0.0",
         }),
         serviceName: "checkout-tax-integration",
+        spanProcessors: [],
     };
 
     if (licenseKey && licenseKey !== "NULL") {
+        const resolvedEndpoint = resolveNewRelicEndpoint(configuredEndpoint);
+        console.info("[new-relic] exporter configuration accepted", {
+            endpoint: describeEndpoint(resolvedEndpoint),
+            licenseKeyPresent: true,
+        });
         if (!logRecordProcessor) {
-            const exporter = new OTLPLogExporterProto({
-                headers: { "api-key": licenseKey },
-                timeoutMillis: 1500,
-                url: resolveNewRelicEndpoint(params.NEW_RELIC_LOG_ENDPOINT),
-            });
-            logRecordProcessor = new BatchLogRecordProcessor({
-                exporter,
-                exportTimeoutMillis: 1500,
-                maxExportBatchSize: 64,
-            });
+            try {
+                const exporter = instrumentExporter(
+                    new OTLPLogExporterProto({
+                        headers: { "api-key": licenseKey },
+                        timeoutMillis: 1500,
+                        url: resolvedEndpoint,
+                    }),
+                );
+                logRecordProcessor = new BatchLogRecordProcessor({
+                    exporter,
+                    exportTimeoutMillis: 1500,
+                    maxExportBatchSize: 64,
+                });
+                console.info("[new-relic] batch processor initialized", {
+                    exportTimeoutMillis: 1500,
+                    maxExportBatchSize: 64,
+                });
+            } catch (error) {
+                console.error("[new-relic] exporter initialization failed", {
+                    errorCode: error.code ?? error.statusCode ?? "unknown",
+                    errorName: error.name || "Error",
+                });
+                throw error;
+            }
         }
         sdkConfig.logRecordProcessors = [logRecordProcessor];
+    } else if (!isDev && !missingLicenseWarningLogged) {
+        console.warn(
+            "[new-relic] log export disabled: NEW_RELIC_LICENSE_KEY is missing or NULL in action inputs",
+        );
+        missingLicenseWarningLogged = true;
+    } else if (isDev && !missingLicenseWarningLogged) {
+        console.info(
+            "[new-relic] log export disabled in this invocation: license key is missing or NULL",
+        );
+        missingLicenseWarningLogged = true;
     }
     return {
         diagnostics: { exportLogs: false, logLevel: isDev ? "debug" : "warn" },
@@ -132,12 +229,22 @@ const telemetryConfig = defineTelemetryConfig((params, isDev) => {
 
 async function flushTelemetry() {
     if (!logRecordProcessor) {
+        console.info("[new-relic] flush skipped", {
+            reason: "batch processor is not initialized",
+        });
         return;
     }
+    const startedAt = Date.now();
+    console.info("[new-relic] flush started");
     try {
         await logRecordProcessor.forceFlush();
+        console.info("[new-relic] flush completed", {
+            durationMs: Date.now() - startedAt,
+        });
     } catch (error) {
         console.warn("[new-relic] telemetry log flush failed", {
+            durationMs: Date.now() - startedAt,
+            errorCode: error.code ?? error.statusCode ?? "unknown",
             errorName: error.name || "Error",
         });
     }
@@ -161,6 +268,11 @@ function createLogger(params = {}) {
                 ? `${message}\n${JSON.stringify(attributes, null, 2)}`
                 : message,
         );
+        emittedLogRecordCount += 1;
+        console.info("[new-relic] log record emitted", {
+            level,
+            recordNumber: emittedLogRecordCount,
+        });
     };
 }
 
