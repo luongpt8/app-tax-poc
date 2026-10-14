@@ -98,5 +98,5 @@ jobs:
           NEW_RELIC_LICENSE_KEY: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
           NEW_RELIC_LOG_ENDPOINT: ${{ vars.NEW_RELIC_LOG_ENDPOINT }}
         run: |
-          npx aio app deploy --no-actions --force-deploy
-          npx aio app build --web-assets --web-optimize -e commerce/backend-ui/2
+          aio app deploy --no-actions --force-deploy
+          aio app build --web-assets --web-optimize -e commerce/backend-ui/2
