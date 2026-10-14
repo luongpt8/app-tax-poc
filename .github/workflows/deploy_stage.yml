@@ -83,3 +83,20 @@ jobs:
           os: ${{ matrix.os }}
           command: deploy
           noPublish: true
+      - name: Deploy web assets (fix NODE_ENV=production)
+        env:
+          NODE_ENV: ''
+          AIO_RUNTIME_NAMESPACE: ${{ secrets.AIO_RUNTIME_NAMESPACE }}
+          AIO_RUNTIME_AUTH: ${{ secrets.AIO_RUNTIME_AUTH }}
+          AIO_PROJECT_ID: ${{ secrets.AIO_PROJECT_ID }}
+          AIO_PROJECT_NAME: ${{ secrets.AIO_PROJECT_NAME }}
+          AIO_PROJECT_ORG_ID: ${{ secrets.AIO_PROJECT_ORG_ID }}
+          AIO_PROJECT_WORKSPACE_ID: ${{ secrets.AIO_PROJECT_WORKSPACE_ID }}
+          AIO_PROJECT_WORKSPACE_NAME: ${{ secrets.AIO_PROJECT_WORKSPACE_NAME }}
+          AIO_PROJECT_WORKSPACE_DETAILS_SERVICES: ${{ secrets.AIO_PROJECT_WORKSPACE_DETAILS_SERVICES }}
+          AIO_COMMERCE_CONFIG_ENCRYPTION_KEY: ${{ secrets.AIO_COMMERCE_CONFIG_ENCRYPTION_KEY }}
+          NEW_RELIC_LICENSE_KEY: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
+          NEW_RELIC_LOG_ENDPOINT: ${{ vars.NEW_RELIC_LOG_ENDPOINT }}
+        run: |
+          npx aio app deploy --no-actions --force-deploy
+          npx aio app build --web-assets --web-optimize -e commerce/backend-ui/2
