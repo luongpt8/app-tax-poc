@@ -265,6 +265,8 @@ async function flushTelemetry() {
 function createLogger(params = {}) {
     const logLevel = params.LOG_LEVEL || "info";
 
+    const LOG_PREFIX = "[Tax-App]";
+
     return function log(data) {
         const entry = sanitize(data);
         const { level: requestedLevel, message: logMessage, ...attributes } = entry;
@@ -272,7 +274,7 @@ function createLogger(params = {}) {
             requestedLevel === "warn" || requestedLevel === "error"
                 ? requestedLevel
                 : "info";
-        const message = logMessage || "[oms]";
+        const message = `${LOG_PREFIX} ${logMessage}` || `${LOG_PREFIX} [Tax-App]`;
         const renderedMessage = Object.keys(attributes).length
             ? `${message}\n${JSON.stringify(attributes, null, 2)}`
             : message;
